@@ -17,21 +17,21 @@ import sys
 from itertools import islice
 
 try:
-    from intervaltree import intervalTree
+    from intervaltree import IntervalTree
 except:
-    print("intervaltree not installed"
+    print("intervaltree not installed")
     print("please see lib/intervaltree or used pip install intervaltree")
     sys.exit(1)
     
 try:
     from Bio.AlignIO import MafIO
 except:
-    print("MafIO not available"
+    print("MafIO not available")
     print("please installed MafIO branch from "
           "https://github.com/T-B-F/biopython")
     sys.exit(1)
 
-class MAFtk(object):
+class MafTK(object):
     """ toolkit class to handle file in MAF (Multiple Alignment Format
     https://genome.ucsc.edu/FAQ/FAQformat.html#format5
     """
@@ -42,7 +42,7 @@ class MAFtk(object):
     def make_maf_index(self, pathfiles, output):
         """ create a tabular file to store maf index from a list of files
         """
-        if not self.tree:
+        if self.tree:
             print("Warning, tree already filled, used MAFtk.clean() "
                 " before creating a new index or use a new instance")
             return
@@ -55,7 +55,7 @@ class MAFtk(object):
                         for record in align:
                             start, size = record.annotations["start"], record.annotations["size"]
                             outf.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(record.id, start, start+size, block[0], block[1], pathfile))
-                            if record.id not in tree:
+                            if record.id not in self.tree:
                                 self.tree[record.id] = IntervalTree()
                             self.tree[record.id][start: start+size] = (block[0], block[1], pathfile)
         return self.tree
@@ -63,7 +63,7 @@ class MAFtk(object):
     def read_index(self, pathindex):
         """ read an interval tree from a index file
         """
-        if not self.tree:
+        if self.tree:
             print("Warning, tree already filled, used MAFtk.clean() "
                 " before reading a new index or use a new instance")
             return
@@ -74,10 +74,11 @@ class MAFtk(object):
                 name, start, stop, block_start, block_end, pathfile = line.strip().split("\t")
                 start, stop = int(start), int(stop)
                 block_start, block_end = int(block_start), int(block_end)
-                if name not in tree:
+                if name not in self.tree:
                     self.tree[name] = IntervalTree()
                 self.tree[name][start: stop] = (block_start, block_end, pathfile)
-                
+        return self.tree
+    
     def write_tree(self, output):
         """ store tree into file
         """
@@ -156,5 +157,5 @@ class MAFtk(object):
         """ erase tree 
         """
         self.tree = dict()
-        
+
         
