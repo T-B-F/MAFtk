@@ -31,6 +31,61 @@ except:
           "https://github.com/T-B-F/biopython")
     sys.exit(1)
 
+msa_characters = ["-", "?", "!", "*", "."]
+
+def compute_offset_pos(seq, pos):
+    """ compute the offset from a position in a MSA to the normal sequence
+    
+    Parameters
+    ==========
+    seq : string
+        the sequence from the MSA 
+    pos : int
+        the position to convert
+        
+    Return
+    ======
+    k : int
+        the position in the MSA
+    """
+
+    k = 0 
+    cnt = 0 if seq[k] not in msa_characters else -1
+    while cnt != pos and k+1 < len(seq):
+        k += 1 
+        if seq[k] not in msa_characters:
+            cnt += 1
+    return k
+
+
+def seq2msa_startstop(seq, start, stop):
+    """ Compute new starting positions, taking into account gaps and other 
+    non amino acids characters
+    
+    Parameters
+    ==========
+    seq : string
+        the sequence from the MSA
+    start : int
+        the start index
+    stop : int
+        the stop index
+        
+    Return
+    ======
+    offstart : int
+        the new start
+    offstop : int
+        the new stop
+    size : int
+        the size of the segment
+    """
+    size = stop - start
+    # need to add 1 to start, converting list indexes to positions
+    offstart = compute_offset_pos(seq, start)
+    offstop = compute_offset_pos(seq, stop)
+    return offstart, offstop+1, size
+
 class MafTK(object):
     """ toolkit class to handle file in MAF (Multiple Alignment Format
     https://genome.ucsc.edu/FAQ/FAQformat.html#format5
@@ -97,59 +152,50 @@ class MafTK(object):
             block_start, block_stop, pathfile = iv.data
             # store all blocks related to a file
             files.setdefault(pathfile, []).append((block_start, block_stop))
+            #print(">", block_start, block_stop)
         alignments = list()
         for pathfile in files:
             positions = sorted(files[pathfile])
             #print(positions)
-            prev = 0
+            prev_pos = 0
             prev_stop = -1
             with open(pathfile) as handle:
                 for pos_start, pos_stop in positions:
                     assert(pos_start > prev_stop) # block cannot overlap, can they?
-                    size = pos_stop - pos_start
-                    #print(pos_start, size)
-                    line = next(islice(handle, pos_start - 1 - prev , pos_start - prev))
+                    pos_size = pos_stop - pos_start
+                    # we remove prev because we only move of the number of lines between the two blocks
+                    line = next(islice(handle, pos_start - 1 - prev_pos , pos_start - prev_pos)) 
                     align = next(MafIO.MafIterator(handle))
                     #print(align)
-                    # only keep part of the alignment that we are interest of
+                    # look for the sequence of the species
                     found = False
                     for record in align:
                         if record.id == species:
                             found = True
                             break
+                    # only keep part of the alignment that we are interest of
                     if found:
                         start_seq = record.annotations["start"]
-                        # count trailing gap
-                        cnt_starting_gap = 0
-                        if record.seq[0] == "-":
-                            i = 0
-                            while True:
-                                if record.seq[i] == "-":
-                                    cnt_starting_gap += 1
-                                else:
-                                    break
-                                i += 1
+                        seq_size = record.annotations["size"]                      
+                        
+                        max_start = max(start_seq, start)
+                        max_stop = min(start_seq+seq_size, stop)
+                        
+                        abs_start = max_start - start_seq
+                        abs_stop = max_stop - start_seq
                         # get new start of alignment
-                        align_start = max(start_seq, start)
-                        offset_start = align_start - start_seq + cnt_starting_gap
+                        
+                        msa_start, msa_stop, msa_size = seq2msa_startstop(str(record.seq), abs_start, abs_stop)
+                        #print(pos_start, pos_stop, start_seq, seq_size, max_start, max_stop, abs_start, abs_stop)
+                        #print(msa_start, msa_stop)
+                        #offset_start = align_start - start_seq + cnt_starting_gap
                         # get new stop of alignment
-                        seq_size = record.annotations["size"]
-                        ali_size = len(record.seq)
-                        offset_stop = offset_start
-                        cur_seq = align_start
-                        # gaps are not taken into account, only increasing if no gap caracters
-                        # to find right stop position
-                        while offset_stop < ali_size:
-                            if cur_seq == stop:
-                                break
-                            elif record.seq[offset_stop] != "-":
-                                cur_seq += 1
-                            offset_stop += 1
-                        alignments.append(align[:, offset_start: offset_stop])
+                        #ali_size = len(record.seq)
+                        alignments.append(align[:, msa_start: msa_stop])
                     else:
                         print("Unable to find SeqRecord for species {} in alignment:".format(species))
                         print(align)
-                    prev = pos_start + size
+                    prev_pos = pos_start + pos_size # + ali_size # ?
                     prev_stop = pos_stop
         return alignments
     

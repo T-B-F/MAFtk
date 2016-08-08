@@ -120,6 +120,9 @@ class TestMafIO(unittest.TestCase):
                 
         # access alignments
         aligns = maf.get_alignments("hg18.chr7",  27578838, 27707221+3)
+        print(str(aligns[0][0].seq))
+        print(str(aligns[1][0].seq))
+        print(str(aligns[2][0].seq))
         self.assertEqual(len(aligns), 3)
         self.assertEqual(len(aligns[2]), 4)
         self.assertEqual(str(aligns[1][0].seq), "TAAAGA")    
