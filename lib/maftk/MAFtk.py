@@ -156,14 +156,22 @@ class MafTK(object):
                     start, stop, (block_start, block_end, pathfile) = iv
                     outf.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(name, start, stop,block_start, block_end, pathfile))
             
-    def _reverse_msa(self, align, msa_start, msa_stop):
+    def _reverse_msa(self, align, msa_start=None, msa_stop=None):
         records = list()
-        for record in align[:,msa_start: msa_stop]:
-            tmp = record.reverse_complement()
-            tmp.id = record.id
-            tmp.name = record.name
-            tmp.description = record.description
-            records.append(tmp)
+        if msa_start == None and msa_stop == None:
+            for record in align:
+                tmp = record.reverse_complement()
+                tmp.id = record.id
+                tmp.name = record.name
+                tmp.description = record.description
+                records.append(tmp)
+        else:
+            for record in align[:,msa_start: msa_stop]:
+                tmp = record.reverse_complement()
+                tmp.id = record.id
+                tmp.name = record.name
+                tmp.description = record.description
+                records.append(tmp)
         alignment = MultipleSeqAlignment(records, record.seq.alphabet) 
         return alignment
 
@@ -172,31 +180,37 @@ class MafTK(object):
         """
         files = dict()
         visited = set()
+        order = list()
+        query_size = stop - start
+        idx = 0
         for iv in self.tree[species][start: stop]:
             iv_start, iv_end = iv.begin, iv.end
             if (iv_start, iv_end) not in visited:
                 visited.add((iv_start, iv_end))
                 block_start, block_stop, pathfile = iv.data
                 # store all blocks related to a file
-                files.setdefault(pathfile, []).append((block_start, block_stop))
+                order.append((iv_start, iv_end, idx))
+                files.setdefault(pathfile, list()).append((block_start, block_stop, idx))
+                idx += 1
                 #print(">", block_start, block_stop)
-        alignments = list()
+        # because segments can be in multiple files and are not necessary in the right order 
+        # we remember the segment positions to reorder the alignment at the end
+        alignments = dict()
+        ordered_alignments = list()
+        order.sort()
+        print(files)
         for pathfile in files:
-            # because block in file are not necessary in the right order we remember the 
-            # exon part positions to reorder alignment at the end
-            positions_idx = range(len(files[pathfile]))
-            zipped_positions = sorted(zip(files[pathfile],positions_idx))
-            positions, sorted_pos_idx = zip(*zipped_positions)
-            #print(positions)
+            # final positions
+            positions = sorted(files[pathfile])
             prev_pos = 0
             prev_stop = -1
             with open(pathfile) as handle:
-                for pos_start, pos_stop in positions:
+                for file_pos_start, file_pos_stop, file_pos_idx in positions:
                     # reading blocks
-                    assert(pos_start > prev_stop) # block cannot overlap, can they?
-                    pos_size = pos_stop - pos_start
+                    assert(file_pos_start > prev_stop) # block cannot overlap, can they?
+                    file_pos_size = file_pos_stop - file_pos_start
                     # we remove prev because we only move of the number of lines between the two blocks
-                    line = next(islice(handle, pos_start - 1 - prev_pos , pos_start - prev_pos)) 
+                    line = next(islice(handle, file_pos_start - 1 - prev_pos , file_pos_start - prev_pos)) 
                     align = next(MafIO.MafIterator(handle))
                     # look for the sequence of the species that we are interested in
                     found = False
@@ -215,10 +229,13 @@ class MafTK(object):
                         msa_len = len(seq)
         
                         if strand_seq < 0:
-                            # change positions and reverse complement
-                            start_seq = srcSize_seq - stop_seq
-                            stop_seq = start_seq + size_seq
-                            seq = seq.reverse_complement()
+                            # convert query positions
+                            tmp = start
+                            start = srcSize_seq - stop
+                            stop = srcSize_seq - tmp
+                            #start_seq = srcSize_seq - stop_seq
+                            #stop_seq = start_seq + size_seq
+                            #seq = seq.reverse_complement()
 
                         # from this point everything is on the plus strand
 
@@ -230,30 +247,35 @@ class MafTK(object):
 
                         # get new start of alignment                        
                         msa_start, msa_stop, msa_size = seq2msa_startstop(str(seq), abs_start, abs_stop)
-                        print(strand_seq, strand, pos_start, pos_stop, pathfile)
-                        print(pos_start, pos_stop, start_seq, size_seq, max_start, max_stop, abs_start, abs_stop)
+                        print(strand_seq, strand, file_pos_start, file_pos_stop, pathfile)
+                        print(file_pos_start, file_pos_stop, start_seq, size_seq, max_start, max_stop, abs_start, abs_stop)
                         print(msa_start, msa_stop)
 
-                        # get new stop of alignment
+                        alignments[file_pos_idx] = (align[:, msa_start: msa_stop], strand_seq)
+                        print(">", record.seq[msa_start: msa_stop])
+                        print(" ", seq[msa_start: msa_stop])
                         
-                        if strand > 0:
-                            # the sequence is already in the correct order not need to revert it
-                            alignments.append(align[:, msa_start: msa_stop])
-                        else: 
-                            # the strand is negative we want positive strand
-                            tmp = msa_start
-                            msa_start = msa_len - msa_stop
-                            msa_stop = msa_len - tmp
-                            alignment = self._reverse_msa(align, msa_start, msa_stop)
-                            alignments.append(alignment)
                     else:
                         print("Unable to find SeqRecord for species {} in alignment:".format(species))
                         print(align)
-                    prev_pos = pos_start + pos_size # pos_size = number of lines in between
-                    prev_stop = pos_stop
-        ordered_alignments = list()
-        for i in sorted_pos_idx:
-            ordered_alignments.append(alignments[i])
+                    #file_pos_size = number of lines between two blocks
+                    prev_pos = file_pos_start + file_pos_size 
+                    prev_stop = file_pos_stop
+        # order segments and convert to the correct strand if necessary
+        if strand < 0:
+            for iv_start, iv_stop, i in order[::-1]:
+                align, strand_seq = alignments[i]
+                if strand_seq < 0:
+                    ordered_alignments.append(align)
+                else:
+                    ordered_alignments.append(self._reverse_msa(align))            
+        else:
+            for iv_start, iv_stop, i in order[::-1]:
+                align, strand_seq = alignments[i]
+                if strand_seq < 0:
+                    ordered_alignments.append(self._reverse_msa(align))
+                else:
+                    ordered_alignments.append(align)
         return ordered_alignments
     
     def clean(self):
