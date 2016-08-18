@@ -15,6 +15,7 @@ from __future__ import print_function
 
 import sys
 from itertools import islice
+from Bio.Align import MultipleSeqAlignment
 
 try:
     from intervaltree import IntervalTree
@@ -84,7 +85,7 @@ def seq2msa_startstop(seq, start, stop):
     # need to add 1 to start, converting list indexes to positions
     offstart = compute_offset_pos(seq, start)
     offstop = compute_offset_pos(seq, stop)
-    return offstart, offstop+1, size
+    return offstart, offstop, size
 
 class MafTK(object):
     """ toolkit class to handle file in MAF (Multiple Alignment Format
@@ -109,10 +110,21 @@ class MafTK(object):
                         block = align._block_lines
                         for record in align:
                             start, size = record.annotations["start"], record.annotations["size"]
-                            outf.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(record.id, start, start+size, block[0], block[1], pathfile))
+                            stop = start + size
+                            strand = record.annotations["strand"]
+                            srcSize = record.annotations["srcSize"]
+                            strand = 1 if strand == "+1" else -1
+                            # see http://genomewiki.ucsc.edu/index.php/Coordinate_Transforms
+                            if strand < 0 :
+                                # convert positions to positive strand strand
+                                tmp = start
+                                start = srcSize - stop
+                                stop = srcSize - tmp # + 1
+
+                            outf.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(record.id, start, stop, block[0], block[1], pathfile))
                             if record.id not in self.tree:
                                 self.tree[record.id] = IntervalTree()
-                            self.tree[record.id][start: start+size] = (block[0], block[1], pathfile)
+                            self.tree[record.id][start: stop] = (block[0], block[1], pathfile)
         return self.tree
 
     def read_index(self, pathindex):
@@ -128,9 +140,9 @@ class MafTK(object):
                 tmp = line.split()
                 name, start, stop, block_start, block_end, pathfile = line.strip().split("\t")
                 start, stop = int(start), int(stop)
-                block_start, block_end = int(block_start), int(block_end)
-                if name not in self.tree:
-                    self.tree[name] = IntervalTree()
+                block_start, block_end = int(block_start), int(block_end)                
+                if name not in self.tree:                     
+                    self.tree[name]= IntervalTree()
                 self.tree[name][start: stop] = (block_start, block_end, pathfile)
         return self.tree
     
@@ -142,32 +154,51 @@ class MafTK(object):
                 for iv in self.tree[sp]:
                     # name, start, stop, block start, block end, path
                     start, stop, (block_start, block_end, pathfile) = iv
-                    outf.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(name, start, stop, block_start, block_end, pathfile))
+                    outf.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(name, start, stop,block_start, block_end, pathfile))
             
-    def get_alignments(self, species, start, stop):
+    def _reverse_msa(self, align, msa_start, msa_stop):
+        records = list()
+        for record in align[:,msa_start: msa_stop]:
+            tmp = record.reverse_complement()
+            tmp.id = record.id
+            tmp.name = record.name
+            tmp.description = record.description
+            records.append(tmp)
+        alignment = MultipleSeqAlignment(records, record.seq.alphabet) 
+        return alignment
+
+    def get_alignments(self, species, start, stop, strand):
         """ get spanning alignments for a specific range of a given species
         """
         files = dict()
+        visited = set()
         for iv in self.tree[species][start: stop]:
-            block_start, block_stop, pathfile = iv.data
-            # store all blocks related to a file
-            files.setdefault(pathfile, []).append((block_start, block_stop))
-            #print(">", block_start, block_stop)
+            iv_start, iv_end = iv.begin, iv.end
+            if (iv_start, iv_end) not in visited:
+                visited.add((iv_start, iv_end))
+                block_start, block_stop, pathfile = iv.data
+                # store all blocks related to a file
+                files.setdefault(pathfile, []).append((block_start, block_stop))
+                #print(">", block_start, block_stop)
         alignments = list()
         for pathfile in files:
-            positions = sorted(files[pathfile])
+            # because block in file are not necessary in the right order we remember the 
+            # exon part positions to reorder alignment at the end
+            positions_idx = range(len(files[pathfile]))
+            zipped_positions = sorted(zip(files[pathfile],positions_idx))
+            positions, sorted_pos_idx = zip(*zipped_positions)
             #print(positions)
             prev_pos = 0
             prev_stop = -1
             with open(pathfile) as handle:
                 for pos_start, pos_stop in positions:
+                    # reading blocks
                     assert(pos_start > prev_stop) # block cannot overlap, can they?
                     pos_size = pos_stop - pos_start
                     # we remove prev because we only move of the number of lines between the two blocks
                     line = next(islice(handle, pos_start - 1 - prev_pos , pos_start - prev_pos)) 
                     align = next(MafIO.MafIterator(handle))
-                    #print(align)
-                    # look for the sequence of the species
+                    # look for the sequence of the species that we are interested in
                     found = False
                     for record in align:
                         if record.id == species:
@@ -176,28 +207,54 @@ class MafTK(object):
                     # only keep part of the alignment that we are interest of
                     if found:
                         start_seq = record.annotations["start"]
-                        seq_size = record.annotations["size"]                      
-                        
+                        size_seq = record.annotations["size"]                      
+                        stop_seq = start_seq + size_seq
+                        strand_seq = int(record.annotations["strand"])
+                        srcSize_seq = record.annotations["srcSize"]
+                        seq = record.seq
+                        msa_len = len(seq)
+        
+                        if strand_seq < 0:
+                            # change positions and reverse complement
+                            start_seq = srcSize_seq - stop_seq
+                            stop_seq = start_seq + size_seq
+                            seq = seq.reverse_complement()
+
+                        # from this point everything is on the plus strand
+
                         max_start = max(start_seq, start)
-                        max_stop = min(start_seq+seq_size, stop)
+                        max_stop = min(stop_seq, stop)
                         
                         abs_start = max_start - start_seq
                         abs_stop = max_stop - start_seq
-                        # get new start of alignment
-                        
-                        msa_start, msa_stop, msa_size = seq2msa_startstop(str(record.seq), abs_start, abs_stop)
-                        #print(pos_start, pos_stop, start_seq, seq_size, max_start, max_stop, abs_start, abs_stop)
-                        #print(msa_start, msa_stop)
-                        #offset_start = align_start - start_seq + cnt_starting_gap
+
+                        # get new start of alignment                        
+                        msa_start, msa_stop, msa_size = seq2msa_startstop(str(seq), abs_start, abs_stop)
+                        print(strand_seq, strand, pos_start, pos_stop, pathfile)
+                        print(pos_start, pos_stop, start_seq, size_seq, max_start, max_stop, abs_start, abs_stop)
+                        print(msa_start, msa_stop)
+
                         # get new stop of alignment
-                        #ali_size = len(record.seq)
-                        alignments.append(align[:, msa_start: msa_stop])
+                        
+                        if strand > 0:
+                            # the sequence is already in the correct order not need to revert it
+                            alignments.append(align[:, msa_start: msa_stop])
+                        else: 
+                            # the strand is negative we want positive strand
+                            tmp = msa_start
+                            msa_start = msa_len - msa_stop
+                            msa_stop = msa_len - tmp
+                            alignment = self._reverse_msa(align, msa_start, msa_stop)
+                            alignments.append(alignment)
                     else:
                         print("Unable to find SeqRecord for species {} in alignment:".format(species))
                         print(align)
-                    prev_pos = pos_start + pos_size # + ali_size # ?
+                    prev_pos = pos_start + pos_size # pos_size = number of lines in between
                     prev_stop = pos_stop
-        return alignments
+        ordered_alignments = list()
+        for i in sorted_pos_idx:
+            ordered_alignments.append(alignments[i])
+        return ordered_alignments
     
     def clean(self):
         """ erase tree 
