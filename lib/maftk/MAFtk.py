@@ -52,10 +52,11 @@ def compute_offset_pos(seq, pos):
 
     k = 0 
     cnt = 0 if seq[k] not in msa_characters else -1
-    while cnt != pos and k+1 < len(seq):
-        k += 1 
+    while cnt != pos and k < len(seq):
         if seq[k] not in msa_characters:
             cnt += 1
+        k += 1 
+        #print(pos, cnt, k, seq)
     return k
 
 
@@ -118,7 +119,7 @@ class MafTK(object):
                             if strand < 0 :
                                 # convert positions to positive strand strand
                                 tmp = start
-                                start = srcSize - stop
+                                start = srcSize - stop -1
                                 stop = srcSize - tmp # + 1
 
                             outf.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(record.id, start, stop, block[0], block[1], pathfile))
@@ -180,7 +181,6 @@ class MafTK(object):
         """
         files = dict()
         visited = set()
-        order = list()
         query_size = stop - start
         idx = 0
         for iv in self.tree[species][start: stop]:
@@ -189,7 +189,7 @@ class MafTK(object):
                 visited.add((iv_start, iv_end))
                 block_start, block_stop, pathfile = iv.data
                 # store all blocks related to a file
-                order.append((iv_start, iv_end, idx))
+                #order.append((iv_start, iv_end, idx))
                 files.setdefault(pathfile, list()).append((block_start, block_stop, idx))
                 idx += 1
                 #print(">", block_start, block_stop)
@@ -197,9 +197,8 @@ class MafTK(object):
         # we remember the segment positions to reorder the alignment at the end
         alignments = dict()
         ordered_alignments = list()
-        order.sort()
-        print(files)
-        print(order)
+        order = list()
+        #print(files)
         for pathfile in files:
             # final positions
             positions = sorted(files[pathfile])
@@ -250,11 +249,12 @@ class MafTK(object):
 
                         # get new start of alignment                        
                         msa_start, msa_stop, msa_size = seq2msa_startstop(str(seq), abs_start, abs_stop)
-                        print(strand_seq, strand, file_pos_start, file_pos_stop, pathfile)
-                        print(file_pos_start, file_pos_stop, start_seq, size_seq, max_start, max_stop, abs_start, abs_stop)
-                        print(msa_start, msa_stop)
+                        #print(strand_seq, strand, file_pos_start, file_pos_stop, pathfile)
+                        #print(start_seq, size_seq, qstart, qstop, max_start, max_stop, abs_start, abs_stop)
+                        #print(msa_start, msa_stop)
 
                         alignments[file_pos_idx] = (align[:, msa_start: msa_stop], strand_seq)
+                        order.append((abs_start, abs_stop, file_pos_idx))
                         #print(">", record.seq[msa_start: msa_stop])
                         #print(" ", seq[msa_start: msa_stop])
                         
@@ -265,7 +265,10 @@ class MafTK(object):
                     prev_pos = file_pos_start + file_pos_size 
                     prev_stop = file_pos_stop
         # order segments and convert to the correct strand if necessary
-        for iv_start, iv_stop, i in order[::-1]:
+        order.sort
+        if strand < 0:
+            order = order[::-1]
+        for iv_start, iv_stop, i in order:
             align, strand_seq = alignments[i]
             if strand < 0:
                 if strand_seq < 0:
