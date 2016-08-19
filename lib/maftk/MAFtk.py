@@ -51,7 +51,7 @@ def compute_offset_pos(seq, pos):
     """
 
     k = 0 
-    cnt = 0 if seq[k] not in msa_characters else -1
+    cnt = 0 #if seq[k] not in msa_characters else -1
     while cnt != pos and k < len(seq):
         if seq[k] not in msa_characters:
             cnt += 1
