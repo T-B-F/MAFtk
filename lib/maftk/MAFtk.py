@@ -17,6 +17,8 @@ import sys
 from itertools import islice
 from Bio.Align import MultipleSeqAlignment
 
+
+
 try:
     from intervaltree import IntervalTree
 except:
@@ -198,7 +200,8 @@ class MafTK(object):
         alignments = dict()
         ordered_alignments = list()
         order = list()
-        #print(files)
+        if __debug__:
+            print(files)
         for pathfile in files:
             # final positions
             positions = sorted(files[pathfile])
@@ -232,32 +235,31 @@ class MafTK(object):
                         qstop = stop
                         if strand_seq < 0:
                             # convert query positions
-                            tmp = start
                             qstart = srcSize_seq - stop
-                            qstop = srcSize_seq - tmp
-                            #start_seq = srcSize_seq - stop_seq
-                            #stop_seq = start_seq + size_seq
-                            #seq = seq.reverse_complement()
+                            qstop = srcSize_seq - start
 
                         # from this point everything is on the plus strand
-
                         max_start = max(start_seq, qstart)
                         max_stop = min(stop_seq, qstop)
-                        
+                        strand_p_start = max_start
+                        strand_p_stop = max_stop
+                        if strand_seq < 0:
+                            strand_p_start, strand_p_stop = srcSize_seq - strand_p_stop, srcSize_seq - strand_p_start
+
                         abs_start = max_start - start_seq
                         abs_stop = max_stop - start_seq
 
                         # get new start of alignment                        
                         msa_start, msa_stop, msa_size = seq2msa_startstop(str(seq), abs_start, abs_stop)
-                        #print(strand_seq, strand, file_pos_start, file_pos_stop, pathfile)
-                        #print(start_seq, size_seq, qstart, qstop, max_start, max_stop, abs_start, abs_stop)
-                        #print(msa_start, msa_stop)
+                        if __debug__:
+                            print(strand_seq, strand, file_pos_start, file_pos_stop, pathfile)
+                            print(start_seq, size_seq, srcSize_seq, qstart, qstop, max_start, max_stop, abs_start, abs_stop)
+                            print(msa_start, msa_stop)
 
                         alignments[file_pos_idx] = (align[:, msa_start: msa_stop], strand_seq)
-                        order.append((abs_start, abs_stop, file_pos_idx))
+                        order.append((strand_p_start, strand_p_stop, file_pos_idx))
                         #print(">", record.seq[msa_start: msa_stop])
                         #print(" ", seq[msa_start: msa_stop])
-                        
                     else:
                         print("Unable to find SeqRecord for species {} in alignment:".format(species))
                         print(align)
@@ -265,9 +267,15 @@ class MafTK(object):
                     prev_pos = file_pos_start + file_pos_size 
                     prev_stop = file_pos_stop
         # order segments and convert to the correct strand if necessary
-        order.sort
+        if __debug__:
+            print(order)
+        order.sort()
+        if __debug__:
+            print(order)
         if strand < 0:
             order = order[::-1]
+        if __debug__:
+            print(order)
         for iv_start, iv_stop, i in order:
             align, strand_seq = alignments[i]
             if strand < 0:
