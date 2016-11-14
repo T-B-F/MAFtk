@@ -100,15 +100,39 @@ class MafTK(object):
     def __init__(self):
         self.tree = dict()
 
-    def make_maf_index(self, pathfiles, output):
+    def make_maf_index(self, pathfiles, output=None):
         """ create a tabular file to store maf index from a list of files
         """
         if self.tree:
             print("Warning, tree already filled, used MAFtk.clean() "
                 " before creating a new index or use a new instance")
             return
-        
-        with open(output, "w") as outf:
+        if output!=None:
+            # output file provided, store the intervals
+            with open(output, "w") as outf:
+                for c, pathfile in enumerate(pathfiles):
+                    with open(pathfile) as inf:
+                        for i, align in enumerate(MafIO.MafIterator(inf)):
+                            block = align._block_lines
+                            for record in align:
+                                start, size = record.annotations["start"], record.annotations["size"]
+                                stop = start + size
+                                strand = record.annotations["strand"]
+                                srcSize = record.annotations["srcSize"]
+                                strand = 1 if strand == "+1" else -1
+                                # see http://genomewiki.ucsc.edu/index.php/Coordinate_Transforms
+                                if strand < 0 :
+                                    # convert positions to positive strand strand
+                                    tmp = start
+                                    start = srcSize - stop -1
+                                    stop = srcSize - tmp # + 1
+
+                                outf.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(record.id, start, stop, block[0], block[1], pathfile))
+                                if record.id not in self.tree:
+                                    self.tree[record.id] = IntervalTree()
+                                self.tree[record.id][start: stop] = (block[0], block[1], pathfile)
+        else:
+            # not output file, only make index tree
             for c, pathfile in enumerate(pathfiles):
                 with open(pathfile) as inf:
                     for i, align in enumerate(MafIO.MafIterator(inf)):
@@ -126,7 +150,6 @@ class MafTK(object):
                                 start = srcSize - stop -1
                                 stop = srcSize - tmp # + 1
 
-                            outf.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(record.id, start, stop, block[0], block[1], pathfile))
                             if record.id not in self.tree:
                                 self.tree[record.id] = IntervalTree()
                             self.tree[record.id][start: stop] = (block[0], block[1], pathfile)
